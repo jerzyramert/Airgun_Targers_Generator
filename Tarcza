@@ -1,0 +1,620 @@
+# -*- coding: utf-8 -*-
+import math
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import cm
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import Table, TableStyle
+from reportlab.lib import colors
+
+# Stałe Konfiguracyjne
+# Konwersje
+POINTS_PER_MM = 2.834645669  # 1 mm = 2.834645669 punktów w ReportLab
+CM_TO_INCH = 0.393701
+MOA_COEF = 0.291 # 1 MOA @ 100m = 2.91 cm, 1 MOA @ D m = D * 0.291 cm
+
+# --- Target Configuration ---
+FIXED_MARGIN_CM = 2.0  # Margin from A4 edge
+FIXED_BULLSEYE_DIAMETER_CM = 2.5 # Bullseye diameter, fixed regardless of distance
+BULLSEYE_COLOR = 'black' # Options: 'black', 'red', 'blue', etc.
+MIN_GRID_SIZE_CM = 0.5 # Minimum size for 1 MIL/MOA before disabling subgrid (5 mm)
+TARGET_SPACING_CM = 1.0 # Spacing between multiple targets
+BOTTOM_RESERVED_HEIGHT = 100 # Points reserved for data fields and notes
+
+# Dane dla tarcz standardowych
+# Wartość punktowa : Średnica pierścienia (mm)
+
+# Tarcza Pistolet Pneumatyczny 10m (Ppn 10m)
+PISTOL_TARGET_DATA = [
+    (1, 155.5), (2, 139.5), (3, 123.5), (4, 107.5), (5, 91.5),
+    (6, 75.5), (7, 59.5), (8, 43.5), (9, 27.5), (10, 11.5),
+    ('Inner Ten', 5.0)
+]
+PISTOL_BLACK_FIELD_DIAMETER_MM = 59.5  # Pierścienie 7, 8, 9, 10
+
+# Tarcza Karabin Pneumatyczny 10m (Kpn 10m)
+RIFLE_TARGET_DATA = [
+    (1, 45.5), (2, 40.5), (3, 35.5), (4, 30.5), (5, 25.5),
+    (6, 20.5), (7, 15.5), (8, 10.5), (9, 5.5), (10, 0.5),
+    # UWAGA: Wewnętrzna dziesiątka to sam pierścień 10 (0.5 mm)
+]
+RIFLE_BLACK_FIELD_DIAMETER_MM = 30.5  # Pierścienie 4, 5, 6, 7, 8, 9, 10
+
+# Wymiary A4
+A4_WIDTH, A4_HEIGHT = A4
+MARGIN_POINTS = FIXED_MARGIN_CM * cm
+
+# Refactored Utility Functions
+def mm_to_points(mm):
+    """Converts millimeters to points."""
+    return mm * POINTS_PER_MM
+
+# --- Rysowanie Pól Danych Strzeleckich ---
+
+def draw_data_fields(c):
+    """Draws the shooting data fields in the bottom margin."""
+    data_labels = ["Shooter:", "Rifle:", "Pellet:", "Conditions:", "Date:"]
+    start_x = MARGIN_POINTS
+    line_spacing = 15
+    line_width = 180
+    
+    # LOWEST_FIELD_Y to minimalna wysokość y, na której rysowana jest najniższa linia
+    LOWEST_FIELD_Y = MARGIN_POINTS + 15 
+    
+    c.setFont("Helvetica-Bold", 8)
+    for i, label in enumerate(data_labels):
+        # Obliczenie przesunięcia w pionie (0 dla Date, 4 dla Shooter)
+        offset = len(data_labels) - 1 - i 
+        
+        y_pos = LOWEST_FIELD_Y + offset * line_spacing
+        
+        c.drawString(start_x, y_pos, label)
+        c.line(start_x + 60, y_pos, start_x + 60 + line_width, y_pos)
+
+# --- Main Target Drawing Functions ---
+
+def generate_mil_target_page(c, distance_m):
+    """Generates the MIL-DOT Target Page (Page 1)."""
+    
+    # 1. Obliczenie granic
+    AVAILABLE_SIZE = min(A4_WIDTH, A4_HEIGHT) - 2 * MARGIN_POINTS
+    
+    # Skala 1:1: 1 MIL = D mm
+    MIL_IN_MM = distance_m
+    POINTS_PER_MIL = mm_to_points(MIL_IN_MM)
+    
+    # Całkowita długość boku (obszar rysowania) jest równa maksymalnemu rozmiarowi A4.
+    TOTAL_SIDE_LENGTH = AVAILABLE_SIZE 
+
+    # Rysowany zakres MILs (ile MILs faktycznie zmieści się na tej stałej długości boku)
+    MAX_MIL_FIT = TOTAL_SIDE_LENGTH / POINTS_PER_MIL
+    
+    # POPRAWKA: Używamy math.floor, aby obliczyć maksymalną CAŁKOWITĄ liczbę MILs na pół strony.
+    INT_MIL_RANGE = math.floor(MAX_MIL_FIT / 2) 
+    
+    # Obliczenie pozycji, aby wyśrodkować tarczę na stronie A4
+    START_X = (A4_WIDTH - TOTAL_SIDE_LENGTH) / 2
+    START_Y = (A4_HEIGHT - TOTAL_SIDE_LENGTH) / 2
+    CENTER_X = START_X + TOTAL_SIDE_LENGTH / 2
+    CENTER_Y = START_Y + TOTAL_SIDE_LENGTH / 2
+    
+    # Rysowanie tła i ramki (ramka tarczy)
+    c.setStrokeColor(colors.black)
+    c.setLineWidth(1.5)
+    c.rect(START_X, START_Y, TOTAL_SIDE_LENGTH, TOTAL_SIDE_LENGTH) # Target Square
+
+    # --- Drawing Grid (1 MIL Major Lines) ---
+    c.setLineWidth(1)
+    
+    # Rysowanie linii siatki 1 MIL (iteracja do INT_MIL_RANGE włącznie)
+    for i in range(-INT_MIL_RANGE, INT_MIL_RANGE + 1):
+        coord = i * POINTS_PER_MIL
+        
+        # Pionowe (rysujemy w zakresie TOTAL_SIDE_LENGTH)
+        c.line(CENTER_X + coord, START_Y, CENTER_X + coord, START_Y + TOTAL_SIDE_LENGTH)
+        # Poziome (rysujemy w zakresie TOTAL_SIDE_LENGTH)
+        c.line(START_X, CENTER_Y + coord, START_X + TOTAL_SIDE_LENGTH, CENTER_Y + coord)
+
+        # Rysowanie etykiet głównych
+        if i != 0:
+            c.setFont("Helvetica", 8)
+            
+            # Etykieta pozioma (X) - u góry (+Y)
+            c.drawCentredString(CENTER_X + coord, START_Y + TOTAL_SIDE_LENGTH + 5, f"{i}")
+            # Etykieta pionowa (Y) - po lewej (-X)
+            c.drawCentredString(START_X - 10, CENTER_Y + coord, f"{i}")
+            
+    # --- Drawing Subgrid (0.2 MIL) ---
+    SUBGRID_DIVISIONS = 5 # 1/5 MIL = 0.2 MIL
+    SUBGRID_THRESHOLD_MM = MIN_GRID_SIZE_CM * 10 # 5 mm threshold
+    
+    # FIX: Włączamy subgrid, jeśli 1 MIL jest >= 5 mm. W przeciwnym razie nie rysujemy.
+    if MIL_IN_MM >= SUBGRID_THRESHOLD_MM:
+        
+        POINTS_PER_SUBGRID = POINTS_PER_MIL / SUBGRID_DIVISIONS
+        
+        # NOWA POPRAWKA: Obliczamy zakres na podstawie maksymalnej liczby podziałek mieszczących się w TOTAL_SIDE_LENGTH
+        MAX_SUBDIVISION_FIT = TOTAL_SIDE_LENGTH / POINTS_PER_SUBGRID
+        INT_SUBDIVISION_RANGE = math.floor(MAX_SUBDIVISION_FIT / 2) # Całkowita liczba podziałek na pół strony
+        
+        c.setStrokeColor(colors.grey)
+        c.setLineWidth(0.2)
+        
+        # Iteracja przez podziałki co 0.2 MIL
+        for i in range(-INT_SUBDIVISION_RANGE, INT_SUBDIVISION_RANGE + 1):
+            if i % SUBGRID_DIVISIONS != 0: # Skip main 1 MIL lines
+                coord = i * POINTS_PER_SUBGRID
+                
+                # Pionowe
+                c.line(CENTER_X + coord, START_Y, CENTER_X + coord, START_Y + TOTAL_SIDE_LENGTH)
+                # Poziome
+                c.line(START_X, CENTER_Y + coord, START_X + TOTAL_SIDE_LENGTH, CENTER_Y + coord)
+
+
+    # --- Drawing Center Crosshairs and Bullseye ---
+    
+    # Bullseye (fixed 2.5 cm diameter)
+    BULLSEYE_RADIUS_POINTS = mm_to_points(FIXED_BULLSEYE_DIAMETER_CM * 10) / 2
+    
+    c.setStrokeColor(colors.black)
+    c.setLineWidth(1)
+    
+    if BULLSEYE_COLOR == 'black':
+        c.setFillColor(colors.black)
+    else:
+        c.setFillColor(colors.red, 0.5) # Semi-transparent if not black
+
+    c.circle(CENTER_X, CENTER_Y, BULLSEYE_RADIUS_POINTS, fill=1, stroke=1)
+    
+    # --- Drawing Info and Data Fields ---
+    
+    c.setFont("Helvetica-Bold", 10)
+    c.drawCentredString(A4_WIDTH / 2, A4_HEIGHT - 30, f"MIL-DOT Target (Scale 1:1) - Distance: {distance_m}m")
+    
+    # Scale Note (Bottom Center)
+    c.setFont("Helvetica", 9)
+    scaling_note_1 = f"Range (full lines): +/- {INT_MIL_RANGE} MILs. Scale: 1 MIL = {MIL_IN_MM:.1f} mm."
+    c.drawCentredString(A4_WIDTH / 2, MARGIN_POINTS / 2 + 12, scaling_note_1)
+    
+    theoretical_max_cm = MAX_MIL_FIT * MIL_IN_MM / 10
+    scaling_note_2 = f"Target size: {theoretical_max_cm:.1f} cm x {theoretical_max_cm:.1f} cm (Max A4 Fit)"
+    c.drawCentredString(A4_WIDTH / 2, MARGIN_POINTS / 2, scaling_note_2)
+    
+    # Shooting Data Fields (Bottom Left)
+    draw_data_fields(c)
+        
+    c.showPage()
+
+
+def generate_moa_target_page(c, distance_m):
+    """Generates the MOA Target Page (Page 1)."""
+    
+    # 1. Obliczenie granic
+    AVAILABLE_SIZE = min(A4_WIDTH, A4_HEIGHT) - 2 * MARGIN_POINTS
+    
+    # Skala 1:1: 1 MOA = D * 2.91 mm
+    MOA_IN_MM = distance_m * 2.91 / 10
+    POINTS_PER_MOA = mm_to_points(MOA_IN_MM)
+    
+    # Chcemy rysować co 1/4 MOA = 0.25 MOA
+    POINTS_PER_QUARTER_MOA = POINTS_PER_MOA / 4
+    
+    # Całkowita długość boku (obszar rysowania) jest równa maksymalnemu rozmiarowi A4.
+    TOTAL_SIDE_LENGTH = AVAILABLE_SIZE
+    
+    # Rysowany zakres MOA (ile 1/4 MOA faktycznie zmieści się na tej stałej długości boku)
+    MAX_QUARTER_MOA_FIT = TOTAL_SIDE_LENGTH / POINTS_PER_QUARTER_MOA
+    
+    # POPRAWKA: Używamy math.floor, aby obliczyć maksymalną CAŁKOWITĄ liczbę 1/4 MOA na pół strony.
+    INT_QUARTER_MOA_RANGE = math.floor(MAX_QUARTER_MOA_FIT / 2)
+    
+    # Obliczenie pozycji, aby wyśrodkować tarczę na stronie A4
+    START_X = (A4_WIDTH - TOTAL_SIDE_LENGTH) / 2
+    START_Y = (A4_HEIGHT - TOTAL_SIDE_LENGTH) / 2
+    CENTER_X = START_X + TOTAL_SIDE_LENGTH / 2
+    CENTER_Y = START_Y + TOTAL_SIDE_LENGTH / 2
+    
+    # Rysowanie tła i ramki (ramka tarczy)
+    c.setStrokeColor(colors.black)
+    c.setLineWidth(1.5)
+    c.rect(START_X, START_Y, TOTAL_SIDE_LENGTH, TOTAL_SIDE_LENGTH) # Target Square
+
+    # --- Drawing Grid (1/4 MOA Lines) ---
+    NUM_QUARTER_MOA = INT_QUARTER_MOA_RANGE
+    SUBGRID_THRESHOLD_MM = MIN_GRID_SIZE_CM * 10 # 5 mm threshold
+    
+    # Warunek: nie drukuj subgridu, jeśli 1 MOA jest mniejsze niż 5 mm.
+    # Włączamy, jeśli 1 MOA jest >= 5 mm
+    if MOA_IN_MM >= SUBGRID_THRESHOLD_MM:
+        # Rysowanie główne: używamy cienkich linii do rysowania subgridu, grube linie będą nadpisywać 1 MOA
+        c.setLineWidth(0.2)
+        c.setStrokeColor(colors.gray)
+        
+        # NOWA POPRAWKA: Obliczamy zakres na podstawie maksymalnej liczby podziałek mieszczących się w TOTAL_SIDE_LENGTH
+        POINTS_PER_SUBGRID = POINTS_PER_QUARTER_MOA # 1/4 MOA
+        MAX_SUBDIVISION_FIT = TOTAL_SIDE_LENGTH / POINTS_PER_SUBGRID
+        INT_SUBDIVISION_RANGE = math.floor(MAX_SUBDIVISION_FIT / 2) # Całkowita liczba podziałek na pół strony
+        
+        for i in range(-INT_SUBDIVISION_RANGE, INT_SUBDIVISION_RANGE + 1):
+            if i % 4 != 0: # Skip main 1 MOA lines
+                coord = i * POINTS_PER_QUARTER_MOA
+                
+                # Pionowe
+                c.line(CENTER_X + coord, START_Y, CENTER_X + coord, START_Y + TOTAL_SIDE_LENGTH)
+                # Poziome
+                c.line(START_X, CENTER_Y + coord, START_X + TOTAL_SIDE_LENGTH, CENTER_Y + coord)
+            
+    # Rysowanie głównych linii (1 MOA) i etykiet (zawsze)
+    for i in range(-NUM_QUARTER_MOA, NUM_QUARTER_MOA + 1):
+        coord = i * POINTS_PER_QUARTER_MOA
+        
+        # Tylko główne linie 1 MOA
+        if i % 4 == 0:
+            c.setLineWidth(1.0)
+            c.setStrokeColor(colors.black)
+            
+            # Pionowe
+            c.line(CENTER_X + coord, START_Y, CENTER_X + coord, START_Y + TOTAL_SIDE_LENGTH)
+            # Poziome
+            c.line(START_X, CENTER_Y + coord, START_X + TOTAL_SIDE_LENGTH, CENTER_Y + coord)
+
+            # Rysowanie etykiet głównych (co 1 MOA)
+            if i != 0:
+                label_value = i / 4
+                c.setFont("Helvetica", 8)
+                
+                # Etykieta pozioma (X) - u góry (+Y)
+                c.drawCentredString(CENTER_X + coord, START_Y + TOTAL_SIDE_LENGTH + 5, f"{label_value:.0f}")
+                # Etykieta pionowa (Y) - po lewej (-X)
+                c.drawCentredString(START_X - 10, CENTER_Y + coord, f"{label_value:.0f}")
+
+
+    # --- Drawing Center Crosshairs and Bullseye ---
+    
+    # Bullseye (fixed 2.5 cm diameter)
+    BULLSEYE_RADIUS_POINTS = mm_to_points(FIXED_BULLSEYE_DIAMETER_CM * 10) / 2
+    
+    c.setStrokeColor(colors.black)
+    c.setLineWidth(1)
+    
+    if BULLSEYE_COLOR == 'black':
+        c.setFillColor(colors.black)
+    else:
+        c.setFillColor(colors.red, 0.5)
+
+    c.circle(CENTER_X, CENTER_Y, BULLSEYE_RADIUS_POINTS, fill=1, stroke=1)
+    
+    # --- Drawing Info and Data Fields ---
+    
+    c.setFont("Helvetica-Bold", 10)
+    c.drawCentredString(A4_WIDTH / 2, A4_HEIGHT - 30, f"MOA Target (Scale 1:1) - Distance: {distance_m}m")
+    
+    # Scale Note (Bottom Center)
+    c.setFont("Helvetica", 9)
+    scaling_note_1 = f"Range (full lines): +/- {INT_QUARTER_MOA_RANGE/4:.2f} MOAs. Scale: 1 MOA = {MOA_IN_MM:.2f} mm."
+    c.drawCentredString(A4_WIDTH / 2, MARGIN_POINTS / 2 + 12, scaling_note_1)
+    
+    theoretical_max_cm = MAX_QUARTER_MOA_FIT * MOA_IN_MM / 10
+    scaling_note_2 = f"Target size: {theoretical_max_cm:.1f} cm x {theoretical_max_cm:.1f} cm (Max A4 Fit)"
+    c.drawCentredString(A4_WIDTH / 2, MARGIN_POINTS / 2, scaling_note_2)
+    
+    # Shooting Data Fields (Bottom Left)
+    draw_data_fields(c)
+        
+    c.showPage()
+
+
+def _draw_single_standard_target_instance(c, center_x, center_y, max_diameter_mm, target_data, black_field_diameter_mm):
+    """Draws a single standard target instance at the specified center coordinates."""
+    
+    # Sort data from largest diameter to smallest
+    sorted_data = sorted(target_data, key=lambda x: x[1], reverse=True)
+    ring_radii = [mm_to_points(d / 2) for _, d in sorted_data]
+
+    # Rysowanie czarnego pola (pierścienie od 4/7 do 10)
+    black_field_radius = mm_to_points(black_field_diameter_mm / 2)
+    c.setFillColor(colors.black)
+    c.circle(center_x, center_y, black_field_radius, fill=1, stroke=0)
+    
+    # --- Rysowanie pierścieni ---
+    
+    c.setLineWidth(1)
+    
+    for idx, (score, diameter_mm) in enumerate(sorted_data):
+        radius_pts = mm_to_points(diameter_mm / 2)
+        
+        # Kontrast linii (pierścieni)
+        if diameter_mm <= black_field_diameter_mm:
+            c.setStrokeColor(colors.white) # Linie wewnątrz czarnego pola są białe
+        else:
+            c.setStrokeColor(colors.black) # Linie poza czarnym polem są czarne
+
+        # Rysowanie obwódki (kontrastowa linia pierścienia)
+        c.circle(center_x, center_y, radius_pts, fill=0, stroke=1)
+        
+        # --- Rysowanie etykiet punktowych ---
+        if isinstance(score, int) and score < 10 and score > 0:
+            
+            current_radius = radius_pts
+            # Promień pierścienia S-1 (mniejszy, wewnętrzny)
+            if idx + 1 < len(ring_radii):
+                next_radius = ring_radii[idx+1]
+            else:
+                next_radius = 0 # Ostatni pierścień
+            
+            # Umieszczenie etykiety w połowie strefy (średnia promieni)
+            label_radius = (current_radius + next_radius) / 2
+            
+            # Ustalenie koloru tekstu
+            if diameter_mm <= black_field_diameter_mm:
+                c.setFillColor(colors.white) # Tekst w czarnym polu jest biały
+            else:
+                c.setFillColor(colors.black) # Tekst poza czarnym polem jest czarny
+
+            # Dostosowanie rozmiaru czcionki
+            font_size = 10 
+            if max_diameter_mm < 50.0:
+                 font_size = 6
+            elif max_diameter_mm < 100.0:
+                 font_size = 8
+            
+            c.setFont("Helvetica-Bold", font_size)
+            
+            # Rysowanie etykiet na 4 kierunkach
+            angles = [0, 90, 180, 270] # Kąty w stopniach
+            for angle in angles:
+                rad = math.radians(angle)
+                
+                # Obliczenie pozycji etykiety
+                x_pos = center_x + label_radius * math.cos(rad)
+                y_pos = center_y + label_radius * math.sin(rad)
+                
+                # Dostosowanie anchor dla wyśrodkowania na osiach
+                c.drawCentredString(x_pos, y_pos - font_size/4, str(score))
+
+
+    # --- Rysowanie Wewnętrznej Dziesiątki (Inner Ten) ---
+    inner_ten_data = next((d for s, d in target_data if s == 'Inner Ten'), None)
+    if inner_ten_data:
+        inner_ten_radius = mm_to_points(inner_ten_data / 2)
+        c.setStrokeColor(colors.white)
+        c.setLineWidth(0.5)
+        c.circle(center_x, center_y, inner_ten_radius, fill=0, stroke=1)
+
+def generate_standard_target_page(c, distance_m, target_data, black_field_diameter_mm, target_name):
+    """
+    Generates the Standard Target Page. Calculates the maximum possible matrix layout.
+    """
+    
+    # 1. Obliczenie granic
+    AVAILABLE_WIDTH = A4_WIDTH - 2 * MARGIN_POINTS
+    AVAILABLE_HEIGHT_MATRIX = A4_HEIGHT - 2 * MARGIN_POINTS - BOTTOM_RESERVED_HEIGHT
+
+    # Znajdź największy pierścień do określenia rozmiaru tarczy
+    max_diameter_mm = max(d for _, d in target_data)
+    
+    # Rysowana długość boku tarczy (w punktach)
+    D_pts = mm_to_points(max_diameter_mm)
+    TARGET_SPACING_POINTS = mm_to_points(TARGET_SPACING_CM * 10)
+    
+    # --- Obliczanie Układu Macierzowego ---
+    
+    # Formuła: floor((Available + Spacing) / (D_pts + Spacing))
+    N_cols = max(1, math.floor((AVAILABLE_WIDTH + TARGET_SPACING_POINTS) / (D_pts + TARGET_SPACING_POINTS)))
+    N_rows = max(1, math.floor((AVAILABLE_HEIGHT_MATRIX + TARGET_SPACING_POINTS) / (D_pts + TARGET_SPACING_POINTS)))
+
+    # Wymiary całej macierzy (do wyśrodkowania)
+    Total_Matrix_Width = N_cols * D_pts + (N_cols - 1) * TARGET_SPACING_POINTS
+    Total_Matrix_Height = N_rows * D_pts + (N_rows - 1) * TARGET_SPACING_POINTS
+    
+    # Obliczenie punktu startowego macierzy (aby ją wyśrodkować)
+    START_X_MATRIX = MARGIN_POINTS + (AVAILABLE_WIDTH - Total_Matrix_Width) / 2
+    
+    # POPRAWKA BŁĘDU CENTROWANIA PIONOWEGO:
+    Bottom_Limit = MARGIN_POINTS + BOTTOM_RESERVED_HEIGHT
+    Top_Limit = A4_HEIGHT - MARGIN_POINTS
+    Free_Space = Top_Limit - Bottom_Limit - Total_Matrix_Height
+    
+    START_Y_MATRIX = Bottom_Limit + Free_Space / 2 
+
+    # Rysowanie tła tarczy (cała biała)
+    c.setFillColor(colors.white)
+    c.rect(MARGIN_POINTS, MARGIN_POINTS + BOTTOM_RESERVED_HEIGHT, AVAILABLE_WIDTH, AVAILABLE_HEIGHT_MATRIX, fill=1)
+
+    # --- Rysowanie Macierzy Tarcz ---
+    
+    for row in range(N_rows):
+        for col in range(N_cols):
+            # Obliczenie centrum dla obecnej tarczy
+            CENTER_X = START_X_MATRIX + col * (D_pts + TARGET_SPACING_POINTS) + D_pts / 2
+            CENTER_Y = START_Y_MATRIX + row * (D_pts + TARGET_SPACING_POINTS) + D_pts / 2
+
+            # Rysowanie pojedynczej instancji tarczy
+            _draw_single_standard_target_instance(c, CENTER_X, CENTER_Y, max_diameter_mm, target_data, black_field_diameter_mm)
+
+
+    # --- Rysowanie Nagłówka i Pól Danych (Rysowane tylko raz) ---
+
+    c.setFont("Helvetica-Bold", 10)
+    c.drawCentredString(A4_WIDTH / 2, A4_HEIGHT - 30, f"{target_name} - Distance: {distance_m}m (Matrix: {N_cols}x{N_rows})")
+    
+    # Scale Note (Bottom Center)
+    c.setFont("Helvetica", 9)
+    scaling_note_1 = f"Target Type: {target_name}. Scale: 1 mm = {POINTS_PER_MM:.2f} pts."
+    c.drawCentredString(A4_WIDTH / 2, MARGIN_POINTS / 2 + 12, scaling_note_1)
+    
+    scaling_note_2 = f"Single target size: {max_diameter_mm:.1f} mm x {max_diameter_mm:.1f} mm (Scale 1:1)"
+    c.drawCentredString(A4_WIDTH / 2, MARGIN_POINTS / 2, scaling_note_2)
+    
+    # Shooting Data Fields (Bottom Left)
+    draw_data_fields(c)
+        
+    c.showPage()
+
+
+def draw_dope_sheet_mil(c):
+    """Generates the MIL Click Conversion Table (MIL DOPE SHEET)."""
+    
+    MIL_CLICK_VALUE = 0.25 # 1 Click = 0.25 MIL
+    
+    c.setFont("Helvetica-Bold", 10)
+    c.drawCentredString(A4_WIDTH / 2, A4_HEIGHT - 30, f"MIL Click Conversion Table (Scope: {MIL_CLICK_VALUE} MIL/Click)")
+    
+    # Dope Sheet Configuration
+    distances = list(range(5, 101, 5)) # 5m to 100m, step 5m
+    mils_correction = list(range(-5, 6)) # -5 MIL to +5 MIL
+    
+    # Create Table Data
+    table_data = []
+    
+    # Header Row
+    header = ["Dist. (m)"] + [f"{m:.1f} MIL" if m != 0 else "0.0 MIL" for m in mils_correction]
+    table_data.append(header)
+    
+    for D in distances:
+        row = [f"{D} m"]
+        for M in mils_correction:
+            # Click calculation: Clicks = MILS / MIL_CLICK_VALUE
+            clicks = M / MIL_CLICK_VALUE
+            row.append(str(int(clicks)))
+        table_data.append(row)
+        
+    # Table Styling
+    table_style = TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 8),
+        ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+        ('FONTSIZE', (1, 1), (-1, -1), 7),
+    ])
+    
+    table = Table(table_data, colWidths=[1.5 * cm] + [1.2 * cm] * len(mils_correction))
+    table.setStyle(table_style)
+    
+    # Draw Table
+    table_width, table_height = table.wrapOn(c, 0, 0)
+    x = (A4_WIDTH - table_width) / 2
+    y = A4_HEIGHT - MARGIN_POINTS - table_height - 50 # Below header
+    table.drawOn(c, x, y)
+    
+    c.showPage()
+
+
+def draw_dope_sheet_moa(c):
+    """Generates the MOA Click Conversion Table (MOA DOPE SHEET)."""
+    
+    MOA_CLICK_VALUE = 0.25 # 1 Click = 0.25 MOA
+    
+    c.setFont("Helvetica-Bold", 10)
+    c.drawCentredString(A4_WIDTH / 2, A4_HEIGHT - 30, f"MOA Click Conversion Table (Scope: {MOA_CLICK_VALUE} MOA/Click)")
+    
+    # Dope Sheet Configuration
+    distances = list(range(5, 101, 5)) # 5m to 100m, step 5m
+    # Correction in CM (Oś X)
+    cm_correction = list(range(-10, 11, 2)) # -10 cm to +10 cm, step 2 cm
+    
+    # Create Table Data
+    table_data = []
+    
+    # Header Row
+    header = ["Dist. (m)"] + [f"{c_val:.0f} cm" if c_val != 0 else "0 cm" for c_val in cm_correction]
+    table_data.append(header)
+    
+    for D in distances:
+        row = [f"{D} m"]
+        for C_CM in cm_correction:
+            # 1. Obliczenie korekty w MOA: MOA = C_CM / (D * 0.291)
+            moa_needed = C_CM / (D * 0.291)
+            
+            # 2. Obliczenie klików: Clicks = MOA_Needed / MOA_CLICK_VALUE
+            clicks = moa_needed / MOA_CLICK_VALUE
+            
+            # Zaokrąglamy do najbliższej liczby całkowitej
+            row.append(str(int(round(clicks)))) 
+            
+        table_data.append(row)
+        
+    # Table Styling
+    table_style = TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 8),
+        ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+        ('FONTSIZE', (1, 1), (-1, -1), 7),
+    ])
+    
+    table = Table(table_data, colWidths=[1.5 * cm] + [1.2 * cm] * len(cm_correction))
+    table.setStyle(table_style)
+    
+    # Draw Table
+    table_width, table_height = table.wrapOn(c, 0, 0)
+    x = (A4_WIDTH - table_width) / 2
+    y = A4_HEIGHT - MARGIN_POINTS - table_height - 50 # Below header
+    table.drawOn(c, x, y)
+    
+    c.showPage()
+
+
+def generate_pdf_document(c, distance_m, target_type):
+    """Coordinates the generation of a multi-page PDF document."""
+    
+    if target_type == 'mil':
+        generate_mil_target_page(c, distance_m)
+    elif target_type == 'moa':
+        generate_moa_target_page(c, distance_m)
+    elif target_type == 'standard_pistol':
+        generate_standard_target_page(c, distance_m, PISTOL_TARGET_DATA, PISTOL_BLACK_FIELD_DIAMETER_MM, "Standard Pistol Target 10m (Ppn 10m)")
+    elif target_type == 'standard_rifle':
+        generate_standard_target_page(c, distance_m, RIFLE_TARGET_DATA, RIFLE_BLACK_FIELD_DIAMETER_MM, "Standard Rifle Target 10m (Kpn 10m)")
+
+# --- Script Usage ---
+
+TARGET_DISTANCES = [10.0, 25.0, 50.0]
+TARGET_DISTANCE_STANDARD = 10.0 # Standard targets are always nominally 10m
+
+# 1. Generowanie tarcz MIL i MOA dla różnych odległości
+for D in TARGET_DISTANCES:
+    # Generowanie MIL Target PDF
+    filename_mil = f"mil_target_{D:.0f}m.pdf"
+    c_mil = canvas.Canvas(filename_mil, pagesize=A4)
+    generate_pdf_document(c_mil, D, 'mil')
+    c_mil.save()
+
+    # Generowanie MOA Target PDF
+    filename_moa = f"moa_target_{D:.0f}m.pdf"
+    c_moa = canvas.Canvas(filename_moa, pagesize=A4)
+    generate_pdf_document(c_moa, D, 'moa')
+    c_moa.save()
+    
+# 2. Generowanie STANDARD Target (jednokrotnie)
+# Tarcza Pistoletowa
+filename_standard_pistol = f"standard_pistol_target.pdf"
+c_standard_pistol = canvas.Canvas(filename_standard_pistol, pagesize=A4)
+generate_pdf_document(c_standard_pistol, TARGET_DISTANCE_STANDARD, 'standard_pistol') 
+c_standard_pistol.save()
+
+# Tarcza Karabinowa
+filename_standard_rifle = f"standard_rifle_target.pdf"
+c_standard_rifle = canvas.Canvas(filename_standard_rifle, pagesize=A4)
+generate_pdf_document(c_standard_rifle, TARGET_DISTANCE_STANDARD, 'standard_rifle') 
+c_standard_rifle.save()
+
+# 3. Generowanie tabel konwersji (Dope Sheets) jako osobne pliki
+# Tabela MIL
+filename_dope_mil = "dope_sheet_mil.pdf"
+c_dope_mil = canvas.Canvas(filename_dope_mil, pagesize=A4)
+draw_dope_sheet_mil(c_dope_mil)
+c_dope_mil.save()
+
+# Tabela MOA
+filename_dope_moa = "dope_sheet_moa.pdf"
+c_dope_moa = canvas.Canvas(filename_dope_moa, pagesize=A4)
+draw_dope_sheet_moa(c_dope_moa)
+c_dope_moa.save()
